@@ -1,0 +1,3 @@
+C:/Tools/Proyectos/TrabajoGrupal/build/CMakeFiles/correccion_examen01.dir
+C:/Tools/Proyectos/TrabajoGrupal/build/CMakeFiles/edit_cache.dir
+C:/Tools/Proyectos/TrabajoGrupal/build/CMakeFiles/rebuild_cache.dir
