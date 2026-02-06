@@ -24,7 +24,9 @@ add_executable(grupal
     include/utils.h
     src/scan_hillis.cpp
     include/scan_hillis.h
-    
+    src/scan_blelloch.cpp
+    include/scan_blelloch.h
+
 )
 
 

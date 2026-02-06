@@ -4,6 +4,7 @@
 #include "histogram.h"
 #include "utils.h" 
 #include "scan_hillis.h" 
+#include "scan_blelloch.h"
 
 void run_histogram_tests() {
     // Tamaños de prueba (puedes ajustar estos números)
@@ -123,6 +124,57 @@ void run_scan_hillis_tests() {
     }
 }
 
+void run_scan_blelloch_tests() {
+    std::vector<int> test_sizes = {1000000, 10000000, 50000000}; 
+    
+    std::cout << "\n========================================" << std::endl;
+    std::cout << "      TESTS DE SCAN (BLELLOCH)          " << std::endl;
+    std::cout << "========================================" << std::endl;
+
+    for (int N : test_sizes) {
+        std::cout << "\n[ DATA SIZE: " << N << " elementos ]" << std::endl;
+        
+        // Datos: todo 1s para verificar fácil
+        std::vector<int> datos(N, 1);
+        
+        std::vector<int> out_ref(N);
+        std::vector<int> out_simd(N);
+        std::vector<int> out_omp(N);
+        std::vector<int> out_omp_simd(N);
+
+        // 1. SERIAL
+        double t_serial = measure_time([&](){ 
+            scan_bl_serial(datos.data(), out_ref.data(), N); 
+        });
+        std::cout << "  Serial:       " << t_serial << " ms" << std::endl;
+        save_to_csv("resultados.csv", "ScanBlelloch", "Serial", N, t_serial, true);
+
+        // 2. SIMD (Block Hierarchical)
+        double t_simd = measure_time([&](){ 
+            scan_bl_simd(datos.data(), out_simd.data(), N); 
+        });
+        bool ok_simd = (out_ref == out_simd);
+        std::cout << "  SIMD:         " << t_simd << " ms " << (ok_simd ? "(OK)" : "(FAIL)") << std::endl;
+        save_to_csv("resultados.csv", "ScanBlelloch", "SIMD", N, t_simd, ok_simd);
+
+        // 3. OPENMP (Tree)
+        double t_omp = measure_time([&](){ 
+            scan_bl_omp(datos.data(), out_omp.data(), N); 
+        });
+        bool ok_omp = (out_ref == out_omp);
+        std::cout << "  OpenMP:       " << t_omp << " ms " << (ok_omp ? "(OK)" : "(FAIL)") << std::endl;
+        save_to_csv("resultados.csv", "ScanBlelloch", "OpenMP", N, t_omp, ok_omp);
+
+        // 4. OPENMP + SIMD (Block Parallel)
+        double t_omp_simd = measure_time([&](){ 
+            scan_bl_omp_simd(datos.data(), out_omp_simd.data(), N); 
+        });
+        bool ok_omp_simd = (out_ref == out_omp_simd);
+        std::cout << "  OpenMP+SIMD:  " << t_omp_simd << " ms " << (ok_omp_simd ? "(OK)" : "(FAIL)") << std::endl;
+        save_to_csv("resultados.csv", "ScanBlelloch", "OpenMP+SIMD", N, t_omp_simd, ok_omp_simd);
+    }
+}
+
 int main() {
     int opcion = 0;
     do {
@@ -140,7 +192,7 @@ int main() {
         switch (opcion) {
             case 1: run_histogram_tests(); break;
             case 2: run_scan_hillis_tests(); break;
-            case 3: std::cout << "En construccion...\n"; break;
+            case 3: run_scan_blelloch_tests(); break;
             case 0: std::cout << "Adios!\n"; break;
             default: std::cout << "Opcion invalida.\n";
         }

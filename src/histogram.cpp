@@ -18,22 +18,20 @@ void histogram_serial(const int *input, int size, int *bins, int num_bins)
 
 void histogram_simd(const int *input, int size, int *bins, int num_bins)
 {
-    // PROCESAMIENTO POR BLOQUES DE 8 (AVX2)
+    
     int i = 0;
     
     // El límite es size - 8 para asegurar que siempre podemos cargar 8 elementos
     for (; i <= size - 8; i += 8)
     {
-        // 1. Cargar 8 enteros desde memoria a registro AVX
+        
         __m256i data = _mm256_loadu_si256((const __m256i *)&input[i]);
         
-        // 2. Bajarlos a un arreglo temporal (AVX2 no tiene Scatter eficiente)
+        
         int temp[8];
         _mm256_storeu_si256((__m256i *)temp, data);
         
-        // 3. Sumar directamente al histograma global
-        // Nota: Como 'num_bins' es pequeño (256), esto se mantiene en Caché L1.
-        // Usamos validación de rango por seguridad.
+        
         if (temp[0] < num_bins) bins[temp[0]]++;
         if (temp[1] < num_bins) bins[temp[1]]++;
         if (temp[2] < num_bins) bins[temp[2]]++;
@@ -44,7 +42,7 @@ void histogram_simd(const int *input, int size, int *bins, int num_bins)
         if (temp[7] < num_bins) bins[temp[7]]++;
     }
     
-    // PEELING (Procesar los elementos restantes que no completaron un grupo de 8)
+    
     for (; i < size; ++i)
     {
         int valor = input[i];
@@ -56,7 +54,7 @@ void histogram_simd(const int *input, int size, int *bins, int num_bins)
 
 void histogram_omp(const int *input, int size, int *bins, int num_bins)
 {
-    // Alinear los bins locales para evitar false sharing
+    
     const int CACHE_LINE = 64;
     const int PADDED_BINS = ((num_bins * sizeof(int) + CACHE_LINE - 1) / CACHE_LINE) * CACHE_LINE / sizeof(int);
     
@@ -111,7 +109,7 @@ void histogram_omp_simd(const int *input, int size, int *bins, int num_bins)
             int temp[8];
             _mm256_storeu_si256((__m256i *)temp, data);
             
-            // Desenrollar completamente
+            
             if (temp[0] >= 0 && temp[0] < num_bins) my_bins[temp[0]]++;
             if (temp[1] >= 0 && temp[1] < num_bins) my_bins[temp[1]]++;
             if (temp[2] >= 0 && temp[2] < num_bins) my_bins[temp[2]]++;
@@ -122,7 +120,7 @@ void histogram_omp_simd(const int *input, int size, int *bins, int num_bins)
             if (temp[7] >= 0 && temp[7] < num_bins) my_bins[temp[7]]++;
         }
         
-        // Un solo thread procesa el resto
+        
         #pragma omp single
         {
             int resto_start = (size / 8) * 8;
@@ -137,7 +135,7 @@ void histogram_omp_simd(const int *input, int size, int *bins, int num_bins)
         }
     }
 
-    // Reducción
+   
     for (int t = 0; t < max_threads; ++t)
     {
         int *thread_bins = &local_bins_flat[t * PADDED_BINS];

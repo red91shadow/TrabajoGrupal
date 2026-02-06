@@ -5,7 +5,7 @@
 #include <vector>
 #include <chrono>
 #include <iostream>
-#include <functional> // Para poder recibir funciones lambda
+#include <functional> 
 
 void save_to_csv(const std::string& filename, 
                  const std::string& alg_name, 

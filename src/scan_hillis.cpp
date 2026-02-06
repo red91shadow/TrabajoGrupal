@@ -7,11 +7,10 @@
 #include <cstring>
 
 // ---------------------------------------------------------
-// 1. SERIAL - Prefix Sum Secuencial (Baseline)
+// 1. SERIAL (Sin cambios, ya es óptimo)
 // ---------------------------------------------------------
 void scan_hs_serial(const int* input, int* output, int size) {
     if (size == 0) return;
-    
     output[0] = input[0];
     for (int i = 1; i < size; ++i) {
         output[i] = output[i - 1] + input[i];
@@ -19,154 +18,147 @@ void scan_hs_serial(const int* input, int* output, int size) {
 }
 
 // ---------------------------------------------------------
-// 2. SIMD - Hillis Steele con Vectorización
+// 2. SIMD (Hillis Steele Vectorizado)
 // ---------------------------------------------------------
 void scan_hs_simd(const int* input, int* output, int size) {
     if (size == 0) return;
 
-    // Buffers para ping-pong
+    // Asignación única
     std::vector<int> buffer(size);
     int* in_buf = output;
     int* out_buf = buffer.data();
     
-    // Copiar input a output
+    // Copia inicial usando memcpy (muy rápido)
     std::memcpy(in_buf, input, size * sizeof(int));
 
     int steps = static_cast<int>(std::ceil(std::log2(size)));
 
     for (int step = 0; step < steps; ++step) {
-        int offset = 1 << step; // 1, 2, 4, 8, 16...
-
-        // Elementos sin vecino a la izquierda (i < offset)
-        for (int i = 0; i < std::min(offset, size); ++i) {
-            out_buf[i] = in_buf[i];
+        int offset = 1 << step;
+        
+        // Optimización: Solo procesamos desde 'offset'
+        // Copiamos la parte inicial que no cambia (serialmente es más rápido que vectorizar memcpy pequeños)
+        if (offset < size) {
+            std::memcpy(out_buf, in_buf, offset * sizeof(int));
         }
 
-        // Procesar con SIMD los elementos >= offset
         int i = offset;
         
-        // Vectorización: procesar de 8 en 8
+        // Bucle Principal SIMD
+        // Usamos unrolling manual para exprimir AVX2
         for (; i <= size - 8; i += 8) {
-            __m256i vec_current = _mm256_loadu_si256((const __m256i*)&in_buf[i]);
-            __m256i vec_prev = _mm256_loadu_si256((const __m256i*)&in_buf[i - offset]);
-            __m256i vec_sum = _mm256_add_epi32(vec_current, vec_prev);
-            _mm256_storeu_si256((__m256i*)&out_buf[i], vec_sum);
+            __m256i v_curr = _mm256_loadu_si256((const __m256i*)&in_buf[i]);
+            __m256i v_prev = _mm256_loadu_si256((const __m256i*)&in_buf[i - offset]);
+            __m256i v_sum  = _mm256_add_epi32(v_curr, v_prev);
+            _mm256_storeu_si256((__m256i*)&out_buf[i], v_sum);
         }
 
-        // Peeling: elementos restantes
+        // Peeling
         for (; i < size; ++i) {
             out_buf[i] = in_buf[i] + in_buf[i - offset];
         }
 
-        // Intercambiar buffers
         std::swap(in_buf, out_buf);
     }
 
-    // Si el resultado quedó en el buffer auxiliar, copiarlo
     if (in_buf != output) {
         std::memcpy(output, in_buf, size * sizeof(int));
     }
 }
 
 // ---------------------------------------------------------
-// 3. OPENMP - Hillis Steele Paralelo
+// 3. OPENMP (CORREGIDO: Región paralela externa)
 // ---------------------------------------------------------
 void scan_hs_omp(const int* input, int* output, int size) {
     if (size == 0) return;
 
-    // Copiar input a output en paralelo
-    #pragma omp parallel for
-    for (int i = 0; i < size; ++i) {
-        output[i] = input[i];
-    }
-
+    // 1. Asignación de memoria (costoso pero inevitable aquí)
     std::vector<int> buffer(size);
     int* in_buf = output;
     int* out_buf = buffer.data();
-    
     int steps = static_cast<int>(std::ceil(std::log2(size)));
 
-    for (int step = 0; step < steps; ++step) {
-        int offset = 1 << step;
+    // REGIÓN PARALELA ÚNICA (Evita overhead de crear hilos 20 veces)
+    #pragma omp parallel
+    {
+        // Copia inicial paralela
+        #pragma omp for
+        for (int i = 0; i < size; ++i) output[i] = input[i];
 
-        #pragma omp parallel for
-        for (int i = 0; i < size; ++i) {
-            if (i >= offset) {
-                out_buf[i] = in_buf[i] + in_buf[i - offset];
-            } else {
-                out_buf[i] = in_buf[i];
+        for (int step = 0; step < steps; ++step) {
+            int offset = 1 << step;
+
+            // Bucle de trabajo
+            #pragma omp for schedule(static)
+            for (int i = 0; i < size; ++i) {
+                if (i >= offset) {
+                    out_buf[i] = in_buf[i] + in_buf[i - offset];
+                } else {
+                    out_buf[i] = in_buf[i];
+                }
             }
-        }
-        
-        std::swap(in_buf, out_buf);
-    }
+            
+            // Sincronización obligatoria antes de cambiar buffers
+            // Solo el hilo maestro hace el swap de punteros
+            #pragma omp single
+            {
+                std::swap(in_buf, out_buf);
+            }
+            // Barrier implícito al final de single, o explícito para seguridad
+        } // Fin del for steps
 
-    // Copiar resultado final si es necesario
-    if (in_buf != output) {
-        #pragma omp parallel for
-        for (int i = 0; i < size; ++i) {
-            output[i] = in_buf[i];
+        // Copia final si es necesario
+        if (in_buf != output) {
+            #pragma omp for
+            for (int i = 0; i < size; ++i) output[i] = in_buf[i];
         }
-    }
+    } 
 }
 
-// ---------------------------------------------------------
-// 4. OPENMP + SIMD - Versión Híbrida Optimizada
-// ---------------------------------------------------------
+
 void scan_hs_omp_simd(const int* input, int* output, int size) {
     if (size == 0) return;
 
-    // Inicialización paralela
-    #pragma omp parallel for
-    for (int i = 0; i < size; ++i) {
-        output[i] = input[i];
-    }
-
     std::vector<int> buffer(size);
     int* in_buf = output;
     int* out_buf = buffer.data();
-    
     int steps = static_cast<int>(std::ceil(std::log2(size)));
 
-    for (int step = 0; step < steps; ++step) {
-        int offset = 1 << step;
+    #pragma omp parallel
+    {
+        // Inicialización vectorizada
+        #pragma omp for simd
+        for (int i = 0; i < size; ++i) output[i] = input[i];
 
-        #pragma omp parallel
-        {
-            // Copiar elementos sin vecino (i < offset)
-            #pragma omp for nowait
+        for (int step = 0; step < steps; ++step) {
+            int offset = 1 << step;
+
+            // División estratégica:
+            // 1. Parte izquierda (copia simple)
+            #pragma omp for schedule(static) nowait
             for (int i = 0; i < std::min(offset, size); ++i) {
                 out_buf[i] = in_buf[i];
             }
 
-            // Procesar elementos con SIMD (i >= offset)
-            #pragma omp for schedule(static)
+            // 2. Parte derecha (Cálculo Pesado con SIMD)
+            // Usamos 'simd' explícito aquí
+            #pragma omp for simd schedule(static)
             for (int i = offset; i < size; ++i) {
-                // Verificar si podemos usar SIMD (bloques de 8)
-                if (i <= size - 8 && (i - offset) % 8 == 0) {
-                    // Cada thread procesa su propio bloque de 8
-                    __m256i vec_current = _mm256_loadu_si256((const __m256i*)&in_buf[i]);
-                    __m256i vec_prev = _mm256_loadu_si256((const __m256i*)&in_buf[i - offset]);
-                    __m256i vec_sum = _mm256_add_epi32(vec_current, vec_prev);
-                    _mm256_storeu_si256((__m256i*)&out_buf[i], vec_sum);
-                    
-                    // Saltar los siguientes 7 elementos (ya procesados)
-                    i += 7;
-                } else {
-                    // Procesamiento escalar para elementos que no alinean
-                    out_buf[i] = in_buf[i] + in_buf[i - offset];
-                }
+                out_buf[i] = in_buf[i] + in_buf[i - offset];
+            }
+            
+            // Esperar a todos antes de cambiar punteros
+            #pragma omp barrier
+
+            #pragma omp single
+            {
+                std::swap(in_buf, out_buf);
             }
         }
-        
-        std::swap(in_buf, out_buf);
-    }
 
-    // Copiar resultado final si quedó en el buffer auxiliar
-    if (in_buf != output) {
-        #pragma omp parallel for
-        for (int i = 0; i < size; ++i) {
-            output[i] = in_buf[i];
+        if (in_buf != output) {
+            #pragma omp for simd
+            for (int i = 0; i < size; ++i) output[i] = in_buf[i];
         }
     }
 }
