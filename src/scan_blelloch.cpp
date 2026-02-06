@@ -1,17 +1,49 @@
 #include "scan_blelloch.h"
-#include <omp.h>
 #include <vector>
 #include <cmath>
 #include <algorithm>
-#include <iostream> 
+#include <omp.h>
+#include <immintrin.h>
+#include <cstring>
 
 
 void scan_bl_serial(const int* input, int* output, int size) {
     if (size == 0) return;
-    int accum = 0;
+
+  
+    int n = size;
+    int power2 = 1;
+    while (power2 < n) power2 *= 2;
+    
+    std::vector<int> v(power2, 0);
+    std::memcpy(v.data(), input, n * sizeof(int));
+
+    
+    for (int stride = 2; stride <= power2; stride *= 2) {
+        for (int i = 0; i < power2; i += stride) {
+            v[i + stride - 1] += v[i + (stride / 2) - 1];
+        }
+    }
+
+    
+    
+    int total_sum = v[power2 - 1];
+    v[power2 - 1] = 0; 
+
+    for (int stride = power2; stride >= 2; stride /= 2) {
+        for (int i = 0; i < power2; i += stride) {
+            int left = i + (stride / 2) - 1;
+            int right = i + stride - 1;
+            
+            int temp = v[left];
+            v[left] = v[right];         
+            v[right] += temp;           
+        }
+    }
+
+    
     for (int i = 0; i < size; ++i) {
-        accum += input[i];
-        output[i] = accum;
+        output[i] = v[i] + input[i];
     }
 }
 
@@ -20,138 +52,118 @@ void scan_bl_simd(const int* input, int* output, int size) {
     if (size == 0) return;
 
     
-    const int BLOCK_SIZE = 1024; 
-    int num_blocks = (size + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    std::vector<int> block_sums(num_blocks, 0);
+    int n = size;
+    int power2 = 1;
+    while (power2 < n) power2 *= 2;
+    std::vector<int> v(power2, 0);
+    std::memcpy(v.data(), input, n * sizeof(int));
 
-  
-    for (int b = 0; b < num_blocks; ++b) {
-        int start = b * BLOCK_SIZE;
-        int end = std::min(start + BLOCK_SIZE, size);
-        
-        int accum = 0;
-        
-        
-        #pragma omp simd reduction(inscan, +:accum)
-        for (int i = start; i < end; ++i) {
-            accum += input[i];
-            #pragma omp scan inclusive(accum)
-            output[i] = accum;
+    for (int stride = 2; stride <= power2; stride *= 2) {
+       
+        for (int i = 0; i < power2; i += stride) {
+            v[i + stride - 1] += v[i + (stride / 2) - 1];
         }
-        
-        
-        if (end > start) {
-            block_sums[b] = output[end - 1]; 
+    }
+
+    v[power2 - 1] = 0;
+    for (int stride = power2; stride >= 2; stride /= 2) {
+        for (int i = 0; i < power2; i += stride) {
+            int left = i + (stride / 2) - 1;
+            int right = i + stride - 1;
+            int temp = v[left];
+            v[left] = v[right];
+            v[right] += temp;
         }
     }
 
     
-    for (int b = 1; b < num_blocks; ++b) {
-        block_sums[b] += block_sums[b - 1];
+    int i = 0;
+    for (; i <= size - 8; i += 8) {
+        __m256i vec_v = _mm256_loadu_si256((const __m256i*)&v[i]);
+        __m256i vec_in = _mm256_loadu_si256((const __m256i*)&input[i]);
+        __m256i vec_sum = _mm256_add_epi32(vec_v, vec_in);
+        _mm256_storeu_si256((__m256i*)&output[i], vec_sum);
     }
-
-    for (int b = 1; b < num_blocks; ++b) {
-        int start = b * BLOCK_SIZE;
-        int end = std::min(start + BLOCK_SIZE, size);
-        int offset = block_sums[b - 1];
-        
-        
-        #pragma omp simd
-        for (int i = start; i < end; ++i) {
-            output[i] += offset;
-        }
-    }
+    for (; i < size; ++i) output[i] = v[i] + input[i];
 }
-
 
 void scan_bl_omp(const int* input, int* output, int size) {
     if (size == 0) return;
-    int num_threads = omp_get_max_threads();
-    std::vector<int> thread_sums(num_threads + 1, 0);
 
-    #pragma omp parallel
-    {
-        int tid = omp_get_thread_num();
-        int nthreads = omp_get_num_threads();
-        
-        int chunk = (size + nthreads - 1) / nthreads;
-        int start = tid * chunk;
-        int end = std::min(start + chunk, size);
-        
-       
-        int accum = 0;
-        if (start < end) {
-            for (int i = start; i < end; ++i) {
-                accum += input[i];
-                output[i] = accum;
-            }
-            thread_sums[tid + 1] = accum;
+    int power2 = 1;
+    while (power2 < size) power2 *= 2;
+    
+   
+    std::vector<int> v(power2, 0);
+    
+    
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i) v[i] = input[i];
+
+   
+    for (int stride = 2; stride <= power2; stride *= 2) {
+        #pragma omp parallel for
+        for (int i = 0; i < power2; i += stride) {
+            v[i + stride - 1] += v[i + (stride / 2) - 1];
         }
-        
-        #pragma omp barrier
+    }
 
-       
-        #pragma omp single
-        {
-            for (int i = 1; i <= nthreads; ++i) {
-                thread_sums[i] += thread_sums[i - 1];
-            }
-        } 
+    v[power2 - 1] = 0; 
 
-        // Sumar Offset Global
-        int offset = thread_sums[tid];
-        if (offset > 0 && start < end) {
-            for (int i = start; i < end; ++i) {
-                output[i] += offset;
-            }
+    for (int stride = power2; stride >= 2; stride /= 2) {
+        #pragma omp parallel for
+        for (int i = 0; i < power2; i += stride) {
+            int left = i + (stride / 2) - 1;
+            int right = i + stride - 1;
+            
+            int temp = v[left];
+            v[left] = v[right];
+            v[right] += temp;
         }
+    }
+
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i) {
+        output[i] = v[i] + input[i];
     }
 }
 
 
 void scan_bl_omp_simd(const int* input, int* output, int size) {
     if (size == 0) return;
-    int num_threads = omp_get_max_threads();
-    std::vector<int> thread_sums(num_threads + 1, 0);
 
-    #pragma omp parallel
-    {
-        int tid = omp_get_thread_num();
-        int nthreads = omp_get_num_threads();
-        int chunk = (size + nthreads - 1) / nthreads;
-        int start = tid * chunk;
-        int end = std::min(start + chunk, size);
+    int power2 = 1;
+    while (power2 < size) power2 *= 2;
+    std::vector<int> v(power2, 0);
+
+    #pragma omp parallel for simd
+    for (int i = 0; i < size; ++i) v[i] = input[i];
+
+    
+    for (int stride = 2; stride <= power2; stride *= 2) {
         
-        // 1. Scan Local VECTORIZADO
-        int accum = 0;
-        if (start < end) {
-            // Usamos OMP SIMD para vectorizar el scan local
-            #pragma omp simd reduction(inscan, +:accum)
-            for (int i = start; i < end; ++i) {
-                accum += input[i];
-                #pragma omp scan inclusive(accum)
-                output[i] = accum;
-            }
-            thread_sums[tid + 1] = accum;
+        #pragma omp parallel for
+        for (int i = 0; i < power2; i += stride) {
+            v[i + stride - 1] += v[i + (stride / 2) - 1];
         }
+    }
 
-        #pragma omp barrier
-
-        // 2. Scan de Offsets
-        #pragma omp single
-        {
-            for (int i = 1; i <= nthreads; ++i) {
-                thread_sums[i] += thread_sums[i - 1];
-            }
+    
+    v[power2 - 1] = 0;
+    for (int stride = power2; stride >= 2; stride /= 2) {
+        #pragma omp parallel for
+        for (int i = 0; i < power2; i += stride) {
+            int left = i + (stride / 2) - 1;
+            int right = i + stride - 1;
+            int temp = v[left];
+            v[left] = v[right];
+            v[right] += temp;
         }
+    }
 
-        // 3. Sumar Offset Global VECTORIZADO
-        int offset = thread_sums[tid];
-        if (offset > 0 && start < end) {
-            #pragma omp simd
-            for (int i = start; i < end; ++i) {
-                output[i] += offset;
-            }
-        }
+    
+    #pragma omp parallel for simd
+    for (int i = 0; i < size; ++i) {
+        output[i] = v[i] + input[i];
     }
 }

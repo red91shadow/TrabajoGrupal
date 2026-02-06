@@ -1,0 +1,11 @@
+{
+	"Configs" : 
+	[
+		"Debug"
+	],
+	"InstallScripts" : 
+	[
+		"C:/Tools/Proyectos/TrabajoGrupal/build/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

@@ -3,81 +3,99 @@
 #include <iostream>
 #include <omp.h>
 #include <vector>
+#include <cmath>
+#include <algorithm>
 
-void histogram_serial(const int *input, int size, int *bins, int num_bins)
+inline int get_bin_index(int value, int min_val, double bin_width, int num_bins)
 {
+    int idx = (int)((value - min_val) / bin_width);
+    if (idx >= num_bins)
+        idx = num_bins - 1;
+    if (idx < 0)
+        idx = 0;
+    return idx;
+}
+
+void histogram_serial(const int *input, int size, int *bins, int num_bins, int min_val, int max_val)
+{
+    std::fill(bins, bins + num_bins, 0);
+
+    int range = max_val - min_val + 1;
+    double bin_width = (double)range / num_bins;
+
     for (int i = 0; i < size; ++i)
     {
-        int valor = input[i];
-        if (valor >= 0 && valor < num_bins)
-        {
-            bins[valor]++;
-        }
+        int idx = get_bin_index(input[i], min_val, bin_width, num_bins);
+        bins[idx]++;
     }
 }
 
-void histogram_simd(const int *input, int size, int *bins, int num_bins)
+void histogram_simd(const int *input, int size, int *bins, int num_bins, int min_val, int max_val)
 {
-    
+    std::fill(bins, bins + num_bins, 0);
+
+    int range = max_val - min_val + 1;
+    double bin_width = (double)range / num_bins;
+
     int i = 0;
-    
-    // El límite es size - 8 para asegurar que siempre podemos cargar 8 elementos
+
+    __m256i v_min = _mm256_set1_epi32(min_val);
+
     for (; i <= size - 8; i += 8)
     {
-        
-        __m256i data = _mm256_loadu_si256((const __m256i *)&input[i]);
-        
-        
+        __m256i v_data = _mm256_loadu_si256((const __m256i *)&input[i]);
+
+        __m256i v_sub = _mm256_sub_epi32(v_data, v_min);
+
         int temp[8];
-        _mm256_storeu_si256((__m256i *)temp, data);
-        
-        
-        if (temp[0] < num_bins) bins[temp[0]]++;
-        if (temp[1] < num_bins) bins[temp[1]]++;
-        if (temp[2] < num_bins) bins[temp[2]]++;
-        if (temp[3] < num_bins) bins[temp[3]]++;
-        if (temp[4] < num_bins) bins[temp[4]]++;
-        if (temp[5] < num_bins) bins[temp[5]]++;
-        if (temp[6] < num_bins) bins[temp[6]]++;
-        if (temp[7] < num_bins) bins[temp[7]]++;
+        _mm256_storeu_si256((__m256i *)temp, v_sub);
+
+        for (int k = 0; k < 8; ++k)
+        {
+            int idx = (int)(temp[k] / bin_width);
+            if (idx >= num_bins)
+                idx = num_bins - 1;
+            else if (idx < 0)
+                idx = 0;
+
+            bins[idx]++;
+        }
     }
-    
-    
+
     for (; i < size; ++i)
     {
-        int valor = input[i];
-        if (valor < num_bins) {
-            bins[valor]++;
-        }
+        int idx = get_bin_index(input[i], min_val, bin_width, num_bins);
+        bins[idx]++;
     }
 }
 
-void histogram_omp(const int *input, int size, int *bins, int num_bins)
+
+void histogram_omp(const int *input, int size, int *bins, int num_bins, int min_val, int max_val)
 {
-    
+    std::fill(bins, bins + num_bins, 0);
+
+    int range = max_val - min_val + 1;
+    double bin_width = (double)range / num_bins;
+
     const int CACHE_LINE = 64;
     const int PADDED_BINS = ((num_bins * sizeof(int) + CACHE_LINE - 1) / CACHE_LINE) * CACHE_LINE / sizeof(int);
-    
+
     int max_threads = omp_get_max_threads();
     std::vector<int> local_bins_flat(max_threads * PADDED_BINS, 0);
 
-    #pragma omp parallel
+#pragma omp parallel
     {
         int tid = omp_get_thread_num();
         int *my_bins = &local_bins_flat[tid * PADDED_BINS];
 
-        #pragma omp for schedule(static)
+#pragma omp for schedule(static)
         for (int i = 0; i < size; ++i)
         {
-            int valor = input[i];
-            if (valor >= 0 && valor < num_bins)
-            {
-                my_bins[valor]++;
-            }
+            int idx = get_bin_index(input[i], min_val, bin_width, num_bins);
+            my_bins[idx]++;
         }
     }
 
-    // Reducción
     for (int t = 0; t < max_threads; ++t)
     {
         int *thread_bins = &local_bins_flat[t * PADDED_BINS];
@@ -88,54 +106,66 @@ void histogram_omp(const int *input, int size, int *bins, int num_bins)
     }
 }
 
-void histogram_omp_simd(const int *input, int size, int *bins, int num_bins)
+
+void histogram_omp_simd(const int *input, int size, int *bins, int num_bins, int min_val, int max_val)
 {
+    std::fill(bins, bins + num_bins, 0);
+
+    int range = max_val - min_val + 1;
+    double bin_width = (double)range / num_bins;
+
     const int CACHE_LINE = 64;
     const int PADDED_BINS = ((num_bins * sizeof(int) + CACHE_LINE - 1) / CACHE_LINE) * CACHE_LINE / sizeof(int);
-    
+
     int max_threads = omp_get_max_threads();
     std::vector<int> local_bins_flat(max_threads * PADDED_BINS, 0);
 
-    #pragma omp parallel
+#pragma omp parallel
     {
         int tid = omp_get_thread_num();
+        int nthreads = omp_get_num_threads();
         int *my_bins = &local_bins_flat[tid * PADDED_BINS];
 
-        #pragma omp for schedule(static) nowait
-        for (int i = 0; i <= size - 8; i += 8)
-        {
-            __m256i data = _mm256_loadu_si256((__m256i *)&input[i]);
-            
-            int temp[8];
-            _mm256_storeu_si256((__m256i *)temp, data);
-            
-            
-            if (temp[0] >= 0 && temp[0] < num_bins) my_bins[temp[0]]++;
-            if (temp[1] >= 0 && temp[1] < num_bins) my_bins[temp[1]]++;
-            if (temp[2] >= 0 && temp[2] < num_bins) my_bins[temp[2]]++;
-            if (temp[3] >= 0 && temp[3] < num_bins) my_bins[temp[3]]++;
-            if (temp[4] >= 0 && temp[4] < num_bins) my_bins[temp[4]]++;
-            if (temp[5] >= 0 && temp[5] < num_bins) my_bins[temp[5]]++;
-            if (temp[6] >= 0 && temp[6] < num_bins) my_bins[temp[6]]++;
-            if (temp[7] >= 0 && temp[7] < num_bins) my_bins[temp[7]]++;
-        }
         
+        int chunk_size = (size + nthreads - 1) / nthreads;
         
-        #pragma omp single
+
+        int start = tid * chunk_size;
+        int end = std::min(start + chunk_size, size);
+
+       
+        __m256i v_min = _mm256_set1_epi32(min_val);
+
+        if (start < end)
         {
-            int resto_start = (size / 8) * 8;
-            for (int i = resto_start; i < size; ++i)
+            int i = start;
+            for (; i <= end - 8; i += 8)
             {
-                int valor = input[i];
-                if (valor >= 0 && valor < num_bins)
+                __m256i v_data = _mm256_loadu_si256((const __m256i *)&input[i]);
+                __m256i v_sub = _mm256_sub_epi32(v_data, v_min);
+
+                int temp[8];
+                _mm256_storeu_si256((__m256i *)temp, v_sub);
+
+                for (int k = 0; k < 8; ++k)
                 {
-                    my_bins[valor]++;
+                    int idx = (int)(temp[k] / bin_width);
+                    if (idx >= num_bins)
+                        idx = num_bins - 1;
+                    else if (idx < 0)
+                        idx = 0;
+                    my_bins[idx]++;
                 }
+            }
+
+            for (; i < end; ++i)
+            {
+                int idx = get_bin_index(input[i], min_val, bin_width, num_bins);
+                my_bins[idx]++;
             }
         }
     }
 
-   
     for (int t = 0; t < max_threads; ++t)
     {
         int *thread_bins = &local_bins_flat[t * PADDED_BINS];
