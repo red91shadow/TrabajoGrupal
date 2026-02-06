@@ -22,6 +22,9 @@ add_executable(grupal
     include/histogram.h
     src/utils.cpp
     include/utils.h
+    src/scan_hillis.cpp
+    include/scan_hillis.h
+    
 )
 
 
