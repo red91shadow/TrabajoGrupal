@@ -1,129 +1,99 @@
 #include <iostream>
 #include <vector>
-
 #include <omp.h>
+#include "histogram.h"
+#include "utils.h" 
+// #include "scan_hillis.h" // Descomentar luego
 
-#include <immintrin.h> //avx
-
-#include <fmt/core.h>
-#include <fmt/ranges.h>
-
-int escalar_simd(const std::vector<float>& x, const std::vector<float> y) {
-    int num_elementos = x.size();
-    int suma = 0;
+void run_histogram_tests() {
+    // Tamaños de prueba (puedes ajustar estos números)
+    std::vector<int> test_sizes = {1000, 50000000, 100000000}; 
+    const int NUM_BINS = 256; 
     
-    int tope = (num_elementos/8) * 8;
-
-    float sum_tmp[8];
-
-    for(int i=0;i<tope;i+=8) {
-        __m256 mx = _mm256_loadu_ps(&x[i]);
-        __m256 my = _mm256_loadu_ps(&y[i]);
-
-        __m256 mz = _mm256_mul_ps(mx,my);
-
-        _mm256_storeu_ps(sum_tmp, mz);
-
-        for (int j = 0; j < 8; j++) {
-            suma += sum_tmp[j];
-        }
-    }
-
-    //iterar sobre los elementos faltantes
-    for(int i=tope;i<num_elementos;i++) {
-        suma += x[i]*y[i];
-    }
-
-    return suma;
-}
-
-int escalar_simd2(const std::vector<float>& x, const std::vector<float> y) {
-    int num_elementos = x.size();
-    int suma = 0;
+    std::cout << "\n========================================" << std::endl;
+    std::cout << "          TESTS DE HISTOGRAMA           " << std::endl;
+    std::cout << "========================================" << std::endl;
     
-    int tope = (num_elementos/8) * 8;
+    for (int N : test_sizes) {
+        std::cout << "\n[ DATA SIZE: " << N << " elementos ]" << std::endl;
+        
+        // 1. Preparar datos (Generación paralela para rapidez)
+        std::vector<int> datos(N);
+        #pragma omp parallel for
+        for(int i=0; i<N; ++i) datos[i] = i % NUM_BINS;
 
-    float sum_tmp[8];
+        // Vectores de resultados (limpios para cada test)
+        std::vector<int> bins_ref(NUM_BINS, 0);       // Serial (Referencia)
+        std::vector<int> bins_simd(NUM_BINS, 0);      // SIMD
+        std::vector<int> bins_omp(NUM_BINS, 0);       // OpenMP
+        std::vector<int> bins_omp_simd(NUM_BINS, 0);  // OpenMP + SIMD
 
-    /**
-     * _mm_hadd_ps
-     * 
-     * a = [ a0 | a1 | a2 | a3 ]
-     * b = [ b0 | b1 | b2 | b3 ]
-     * 
-     * res = [ a0 + a1 | a2 + a3 | b0 + b1 | b2 + b3 ]
-     */
+        // ---------------------------------------------------------
+        // 1. SERIAL
+        // ---------------------------------------------------------
+        double t_serial = measure_time([&](){ 
+            histogram_serial(datos.data(), N, bins_ref.data(), NUM_BINS); 
+        });
+        std::cout << "  Serial:       " << t_serial << " ms" << std::endl;
+        save_to_csv("resultados.csv", "Histograma", "Serial", N, t_serial, true);
 
-    for(int i=0;i<tope;i+=8) {
-        __m256 mx = _mm256_loadu_ps(&x[i]);
-        __m256 my = _mm256_loadu_ps(&y[i]);
+        // ---------------------------------------------------------
+        // 2. SIMD 
+        // ---------------------------------------------------------
+        double t_simd = measure_time([&](){ 
+            histogram_simd(datos.data(), N, bins_simd.data(), NUM_BINS); 
+        });
+        bool ok_simd = (bins_ref == bins_simd);
+        std::cout << "  SIMD:         " << t_simd << " ms " << (ok_simd ? "(OK)" : "(FAIL)") << std::endl;
+        save_to_csv("resultados.csv", "Histograma", "SIMD", N, t_simd, ok_simd);
 
-        __m256 mz = _mm256_mul_ps(mx,my);
+        // ---------------------------------------------------------
+        // 3. OPENMP
+        // ---------------------------------------------------------
+        double t_omp = measure_time([&](){ 
+            histogram_omp(datos.data(), N, bins_omp.data(), NUM_BINS); 
+        });
+        bool ok_omp = (bins_ref == bins_omp);
+        std::cout << "  OpenMP:       " << t_omp << " ms " << (ok_omp ? "(OK)" : "(FAIL)") << std::endl;
+        save_to_csv("resultados.csv", "Histograma", "OpenMP", N, t_omp, ok_omp);
 
-        __m128 low  = _mm256_castps256_ps128(mz);   //[a0,a1,a2,a3,a4,a5,a6,a7] -> [a0,a1,a2,a3]
-        __m128 high = _mm256_extractf128_ps(mz, 1); //[a0,a1,a2,a3,a4,a5,a6,a7] -> [a4,a5,a6,a7]
-
-        __m128 sum_128 = _mm_add_ps(low, high);     //sum_128 = [a0+a4, a1+a5, a2+a6, a3+a7]
-
-        sum_128 = _mm_hadd_ps(sum_128, sum_128);    //sum_128 = [a0+a4+a1+a5, a2+a6+a3+a7, ... , ...]
-        sum_128 = _mm_hadd_ps(sum_128, sum_128);
-
-        suma += _mm_cvtss_f32(sum_128);             //extraer el primer elemento de sum_128
+        // ---------------------------------------------------------
+        // 4. OPENMP + SIMD
+        // ---------------------------------------------------------
+        double t_omp_simd = measure_time([&](){ 
+            histogram_omp_simd(datos.data(), N, bins_omp_simd.data(), NUM_BINS); 
+        });
+        bool ok_omp_simd = (bins_ref == bins_omp_simd);
+        std::cout << "  OpenMP+SIMD:  " << t_omp_simd << " ms " << (ok_omp_simd ? "(OK)" : "(FAIL)") << std::endl;
+        save_to_csv("resultados.csv", "Histograma", "OpenMP+SIMD", N, t_omp_simd, ok_omp_simd);
     }
-
-    //iterar sobre los elementos faltantes
-    for(int i=tope;i<num_elementos;i++) {
-        suma += x[i]*y[i];
-    }
-
-    return suma;
-}
-
-int escalar_secciones_paralelas(const std::vector<float>& x, const std::vector<float> y) {
-    int num_elementos = x.size();
-    int suma = 0;
-
-    #pragma omp parallel shared(x,y,num_elementos,suma)
-    {
-        int thread_id = omp_get_thread_num();
-        int thread_count = omp_get_num_threads();
-
-        int block_size = std::ceil(1.0 * num_elementos / thread_count);
-
-        int start = thread_id * block_size;
-        int end = (thread_id+1)*block_size;
-
-        if(end>num_elementos) {
-            end = num_elementos;
-        }
-
-        //fmt::println("thread_{}: [{}..{}]", thread_id, start, end);
-
-        int local_sum = 0;
-        for(int i=start;i<end;i++) {
-            local_sum += x[i]*y[i];
-        }
-
-        #pragma omp critical
-        suma = suma + local_sum;
-    }
-
-    return suma;
 }
 
 int main() {
+    int opcion = 0;
+    do {
+        // Limpiar pantalla simple
+        std::cout << "\n=================================\n";
+        std::cout << "      PROYECTO HPC - MENU        \n";
+        std::cout << "=================================\n";
+        std::cout << "1. Correr pruebas de Histograma\n";
+        std::cout << "2. Correr pruebas de Scan (Hillis)\n";
+        std::cout << "3. Correr pruebas de Scan (Blelloch)\n";
+        std::cout << "0. Salir\n";
+        std::cout << "Seleccione: ";
+        std::cin >> opcion;
 
-    std::vector<float> x = {1,1,1,1,1,1,1,1,1,1};
-    std::vector<float> y = {2,2,2,2,2,2,2,2,2,2};
+        switch (opcion) {
+            case 1: run_histogram_tests(); break;
+            case 2: std::cout << "En construccion...\n"; break;
+            case 3: std::cout << "En construccion...\n"; break;
+            case 0: std::cout << "Adios!\n"; break;
+            default: std::cout << "Opcion invalida.\n";
+        }
+        
+        if (opcion != 0) wait_for_enter();
 
-    auto suma1 = escalar_simd(x,y);
-    fmt::println("SIMD_1: {}", suma1);
+    } while (opcion != 0);
 
-    auto suma2 = escalar_simd2(x,y);
-    fmt::println("SIMD_2: {}", suma2);
-
-    auto suma3 = escalar_secciones_paralelas(x,y);
-    fmt::println("OpenMP: {}", suma3);
     return 0;
 }
-
