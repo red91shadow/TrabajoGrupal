@@ -1,8 +1,0 @@
-# ninja log v7
-49	990	7920663248831086	CMakeFiles/grupal.dir/Debug/src/scan_blelloch.cpp.obj	2ce842a6dde6bdf7
-44	602	7920663248774435	CMakeFiles/grupal.dir/Debug/src/utils.cpp.obj	7d9ef020225a8ce2
-38	109	7920663248725780	CMakeFiles/grupal.dir/Debug/main.cpp.obj	86f9b7f451bbbe3b
-46	944	7920663248805962	CMakeFiles/grupal.dir/Debug/src/scan_hillis.cpp.obj	1ea16bb8dfab332
-41	1135	7920663248750399	CMakeFiles/grupal.dir/Debug/src/histogram.cpp.obj	a3638ddbed4731c0
-1135	1863	7920663259696195	Debug/grupal.exe	57451a714f3fd28d
-53	790	7920663248861293	CMakeFiles/grupal.dir/Debug/src/test_runner.cpp.obj	1dfae4b27ab74d1

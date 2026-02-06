@@ -1,3 +1,0 @@
-C:/Tools/Proyectos/TrabajoGrupal/build/CMakeFiles/grupal.dir
-C:/Tools/Proyectos/TrabajoGrupal/build/CMakeFiles/edit_cache.dir
-C:/Tools/Proyectos/TrabajoGrupal/build/CMakeFiles/rebuild_cache.dir
